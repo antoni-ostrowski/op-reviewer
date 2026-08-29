@@ -1,0 +1,26 @@
+[tools]
+go = "1.27.0"
+
+[env]
+_.file = ".env.local"
+
+[tasks.dev]
+run = [
+	{task = "docker-build"},
+	{task = "docker-run"}
+]
+
+[tasks.build]
+run = "go build -o op-reviewer ./cmd/main.go "
+
+
+[tasks.docker-build]
+run = "docker buildx build --platform linux/arm64 -t antost360/op-reviewer:latest ."
+
+[tasks.docker-push]
+run = "docker push antost360/op-reviewer:latest"
+
+[tasks.docker-run]
+run = "docker run --env-file .env.docker antost360/op-reviewer:latest"
+
+

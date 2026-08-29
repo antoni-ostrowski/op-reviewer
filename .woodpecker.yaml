@@ -1,0 +1,28 @@
+steps:
+  review:
+    image: antost360/op-reviewer:latest
+    environment:
+      OP_REVIEWER_GH_TOKEN:
+        from_secret: OP_REVIEWER_GH_TOKEN
+      OP_REVIEWER_antoni_ostrowski:
+        from_secret: OP_REVIEWER_antoni_ostrowski 
+    when:
+      - event: pull_request
+
+  # deploy:
+  #   image: docker:27-cli
+  #   volumes:
+  #     - /var/run/docker.sock:/var/run/docker.sock
+  #   environment:
+  #     DOCKER_USERNAME:
+  #       from_secret: DOCKER_USERNAME
+  #     DOCKER_PASSWORD:
+  #       from_secret: DOCKER_PASSWORD
+  #   commands:
+  #     - echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
+  #     - docker build --platform=linux/amd64 -t antost360/web-ssh:latest .
+  #     - docker push antost360/web-ssh:latest    
+  #   when:
+  #     - event: push 
+  #       branch: main
+  #
