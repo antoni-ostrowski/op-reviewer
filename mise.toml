@@ -4,7 +4,11 @@ go = "1.27.0"
 [env]
 _.file = ".env.local"
 
+
 [tasks.dev]
+run = "go run ./cmd/main.go"
+
+[tasks.docker-dev]
 run = [
 	{task = "docker-build"},
 	{task = "docker-run"}
