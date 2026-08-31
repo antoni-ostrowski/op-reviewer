@@ -39,7 +39,7 @@ Use them to identify findings already reported anywhere on this PR. Do not repea
 
 3. Review for: bugs, logic errors, security issues, error handling, code quality, performance.
 
-4. Return ONLY a single JSON string matching schema {"message":"<gh commands joined by \\n>"}. No markdown, no explanation, no extra keys. Put all write gh commands inside the message field. If there are no new findings, return {"message":""}.
+4. Return ONLY a single JSON string matching schema {"message":"<gh commands joined by \\n>"}. No markdown, no explanation, no extra keys. Put all write gh commands inside the message field. Every review or inline comment body MUST end with two newlines followed by exactly: AI review by op-reviewer. If there are no new findings, return {"message":""}.
 
 5. Use ONLY these bash placeholders with ${VAR} syntax:
 - ${CI_COMMIT_SHA} - commit SHA to review
@@ -51,6 +51,7 @@ Use them to identify findings already reported anywhere on this PR. Do not repea
 - One summary review: gh api repos/${CI_REPO}/pulls/${CI_COMMIT_PULL_REQUEST}/reviews -f event="COMMENT" -f body="..." -f commit_id="${CI_COMMIT_SHA}"
 - Zero or more inline comments: gh api repos/${CI_REPO}/pulls/${CI_COMMIT_PULL_REQUEST}/comments -f body="..." -f commit_id="${CI_COMMIT_SHA}" -f path="path/to/file" -F line=N -f side="RIGHT"
   line MUST be the absolute line number in the current file, not a diff position, offset, or file index. Use only lines present on the new/current side of the diff with side="RIGHT". Read the hunk header from git diff HEAD~1 or the GitHub patch, then map the selected added line to its current file line number. Never use position.
+  Every body must end with \n\nAI review by op-reviewer.
 Join all commands with \\n inside message.
 
 Example message value:
@@ -106,12 +107,6 @@ Example message value:
 	if _, err := tmp.WriteString(escaped); err != nil {
 		slog.Error("failed to write commands", "error", err)
 		os.Exit(1)
-	}
-	if strings.TrimSpace(d) != "" {
-		if _, err := tmp.WriteString("\ngh api repos/${CI_REPO}/issues/${CI_COMMIT_PULL_REQUEST}/comments -f body=\"AI review by op-reviewer\"\n"); err != nil {
-			slog.Error("failed to write review marker", "error", err)
-			os.Exit(1)
-		}
 	}
 	if _, err := tmp.WriteString("\n"); err != nil {
 		slog.Error("failed to write trailing newline", "error", err)
