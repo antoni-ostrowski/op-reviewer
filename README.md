@@ -3,7 +3,7 @@
 `op-reviewer` is a tool that uses [OpenCode](https://opencode.ai/) to review the
 latest pull-request commit and publish the result to GitHub. Executes in docker container, its not depending on any specific CI runner.
 
-> currently its meant for woodpecker
+> currently its meant for woodpecker CI
 
 ## How It Works
 
