@@ -39,6 +39,24 @@ CI_COMMIT_AUTHOR=antoni-ostrowski
 OP_REVIEWER_antoni_ostrowski=<opencode-api-key>
 ```
 
+## minimal setup for woodpecker
+
+
+```sh
+  review:
+    image: antost360/op-reviewer:latest
+    environment:
+      OP_REVIEWER_GH_TOKEN:
+        from_secret: OP_REVIEWER_GH_TOKEN
+      OP_REVIEWER_antoni_ostrowski:
+        from_secret: OP_REVIEWER_antoni_ostrowski 
+      OP_REVIEWER_MODEL:
+        from_secret: OP_REVIEWER_MODEL
+    when:
+      - event: pull_request
+
+```
+
 ## Run With Docker
 
 Build the image:
