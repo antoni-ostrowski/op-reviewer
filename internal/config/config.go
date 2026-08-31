@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 
 	"github.com/antoni-ostrowski/op-reviewer/internal/utils"
@@ -34,7 +33,11 @@ func New() (*Config, error) {
 	conf.GhToken = os.Getenv("OP_REVIEWER_GH_TOKEN")
 	conf.SourceCodePath = "./source"
 
-	if _, err := os.Stat(filepath.Join(conf.SourceCodePath, ".git")); os.IsNotExist(err) {
+	if _, err := os.Stat(".git"); err == nil {
+		conf.SourceCodePath = "." // Woodpecker workspace already = repo
+	} else if _, err := os.Stat("/app/source/.git"); err == nil {
+		conf.SourceCodePath = "/app/source"
+	} else {
 		slog.Info("git: repo not found in source code path, fetching via repo url", "repo_url", conf.RepoUrl)
 		if err := utils.ExecCmdPiped(exec.Command("git", "clone", conf.RepoUrl, conf.SourceCodePath)); err != nil {
 			return nil, fmt.Errorf("config: failed to clone repo: %v", err)
