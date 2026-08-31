@@ -19,7 +19,7 @@ run = "go build -o op-reviewer ./cmd/main.go "
 
 
 [tasks.docker-build]
-run = "docker buildx build --platform linux/arm64 -t antost360/op-reviewer:latest ."
+run = "docker buildx build --platform linux/arm64,linux/amd64 -t antost360/op-reviewer:latest ."
 
 [tasks.docker-push]
 run = "docker push antost360/op-reviewer:latest"
