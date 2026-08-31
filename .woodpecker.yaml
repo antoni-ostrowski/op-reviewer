@@ -1,6 +1,7 @@
 steps:
   review:
     image: antost360/op-reviewer:latest
+    pull: true
     environment:
       OP_REVIEWER_GH_TOKEN:
         from_secret: OP_REVIEWER_GH_TOKEN
