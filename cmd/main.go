@@ -22,9 +22,6 @@ func main() {
 
 	slog.Info("sucessfully created config", "details", conf)
 
-	utils.ExecCmdPiped(exec.Command("ls", "-al"))
-	utils.ExecCmdPiped(exec.Command("ls", "-al", conf.SourceCodePath))
-
 	prompt := `
 UNDER ANY CIRCUMSTANCES DO NOT READ OS ENVS DIRECTLY via env/printenv/cat /proc/self/environ or by reading files that contain secrets. Use only placeholders.
 
@@ -60,7 +57,7 @@ Example message value:
 	cmd := exec.Command("opencode", "run", "--format", "json", "--model", conf.Model, "--log-level", "DEBUG", "--print-logs", strings.TrimSpace(prompt))
 	fmt.Printf("cmd %v\n", cmd)
 	cmd.Env = safeEnv(conf.AiApiKey, conf.GhToken)
-	cmd.Dir = "./source"
+	cmd.Dir = conf.SourceCodePath
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		fmt.Printf("res: %v\n", string(out))
