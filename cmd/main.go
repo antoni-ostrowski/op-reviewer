@@ -51,7 +51,7 @@ Join all commands with \\n inside message.
 Example message value:
 "gh api repos/${CI_REPO}/pulls/${CI_COMMIT_PULL_REQUEST}/comments -f body=\"Avoid sync read in handler at src.js:12\" -f commit_id=\"${CI_COMMIT_SHA}\" -f path=\"src.js\" -F position=6\\ngh api repos/${CI_REPO}/pulls/${CI_COMMIT_PULL_REQUEST}/reviews -f event=\"COMMENT\" -f body=\"Overall: fix error handling, otherwise LGTM\" -f commit_id=\"${CI_COMMIT_SHA}\""	`
 
-	cmd := exec.Command("opencode", "run", "--format", "json", "--model", conf.Model, "--log-level", "DEBUG", strings.TrimSpace(prompt))
+	cmd := exec.Command("opencode", "run", "--format", "json", "--model", conf.Model, "--log-level", "DEBUG", "--print-logs", strings.TrimSpace(prompt))
 	fmt.Printf("cmd %v\n", cmd)
 	cmd.Env = safeEnv(conf.AiApiKey)
 	cmd.Dir = "./source"
@@ -59,6 +59,15 @@ Example message value:
 	if err != nil {
 		fmt.Printf("res: %v\n", string(out))
 		slog.Error("agent run failed", "error", err, "output", string(out))
+		if apiErr := parseOpenCodeError(out); apiErr != nil {
+			slog.Error("opencode api error",
+				"error_name", apiErr.Error.Name,
+				"error_message", apiErr.Error.Data.Message,
+				"error_ref", apiErr.Error.Data.Ref,
+				"session_id", apiErr.SessionID,
+				"timestamp", apiErr.Timestamp,
+			)
+		}
 		os.Exit(1)
 	}
 
@@ -254,6 +263,37 @@ func AgentResponse(data []byte) string {
 	}
 	return raw
 }
+
+type OpenCodeError struct {
+	Type      string `json:"type"`
+	Timestamp int64  `json:"timestamp"`
+	SessionID string `json:"sessionID"`
+	Error     struct {
+		Name string `json:"name"`
+		Data struct {
+			Message string `json:"message"`
+			Ref     string `json:"ref"`
+		} `json:"data"`
+	} `json:"error"`
+}
+
+func parseOpenCodeError(data []byte) *OpenCodeError {
+	for _, line := range bytes.Split(data, []byte("\n")) {
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
+			continue
+		}
+		var e OpenCodeError
+		if err := json.Unmarshal(line, &e); err != nil {
+			continue
+		}
+		if e.Type == "error" && e.Error.Name != "" {
+			return &e
+		}
+	}
+	return nil
+}
+
 func safeEnv(apiKey string) []string {
 	allow := map[string]bool{
 		"HOME":   true,
