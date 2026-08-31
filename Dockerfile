@@ -26,5 +26,5 @@ RUN export DEBIAN_FRONTEND=noninteractive \
     && curl -fsSL https://opencode.ai/install | bash
 ENV PATH="/root/.opencode/bin:$PATH"
 WORKDIR /app
-COPY --from=deps /app/op-reviewer ./op-reviewer
-CMD ["./op-reviewer"]
+COPY --from=deps /app/op-reviewer /usr/local/bin/op-reviewer
+CMD ["/usr/local/bin/op-reviewer"]

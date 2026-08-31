@@ -2,7 +2,7 @@ steps:
   review:
     image: antost360/op-reviewer:latest
     environment:
-      GH_TOKEN:
+      OP_REVIEWER_GH_TOKEN:
         from_secret: OP_REVIEWER_GH_TOKEN
       OP_REVIEWER_antoni_ostrowski:
         from_secret: OP_REVIEWER_antoni_ostrowski 
@@ -27,4 +27,3 @@ steps:
     when:
       - event: push 
         branch: main
-
