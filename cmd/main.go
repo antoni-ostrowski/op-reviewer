@@ -32,17 +32,22 @@ You are a code review agent. You are running inside the repo (cwd is repo root) 
 
 1. Find changes: run git diff HEAD~1, git show --stat, git log -1 --name-only to get changed files and diff. Review only the diff, but use the repo to gain context about the change if needed/unclear.
 
-2. Review for: bugs, logic errors, security issues, error handling, code quality, performance.
+2. Before reviewing, inspect existing pull-request reviews and inline comments with these read-only commands:
+- gh api repos/${CI_REPO}/pulls/${CI_COMMIT_PULL_REQUEST}/reviews
+- gh api repos/${CI_REPO}/pulls/${CI_COMMIT_PULL_REQUEST}/comments
+Use them to identify findings already reported anywhere on this PR. Do not repeat an existing finding, even if it was reported on an earlier commit. Report only genuinely new findings introduced by the latest diff.
 
-3. Return ONLY a single JSON string matching schema {"message":"<gh commands joined by \\n>"}. No markdown, no explanation, no extra keys. Put all gh commands inside the message field.
+3. Review for: bugs, logic errors, security issues, error handling, code quality, performance.
 
-4. Use ONLY these bash placeholders with ${VAR} syntax:
+4. Return ONLY a single JSON string matching schema {"message":"<gh commands joined by \\n>"}. No markdown, no explanation, no extra keys. Put all write gh commands inside the message field. If there are no new findings, return {"message":""}.
+
+5. Use ONLY these bash placeholders with ${VAR} syntax:
 - ${CI_COMMIT_SHA} - commit SHA to review
 - ${CI_REPO} - owner/repo (e.g. octocat/hello-world) — use this for gh api paths
 - ${CI_COMMIT_PULL_REQUEST} - pull request number
-- gh CLI is already authenticated via OP_REVIEWER_GH_TOKEN, do NOT prefix commands with GH_TOKEN and do NOT handle auth, do not try to execute these gh cli commands, only respond with them in that correct JSON form.
+- gh CLI is already authenticated via GH_TOKEN. Read-only gh api commands above are allowed for gathering context. Do not execute write commands; return them in the JSON response only. Do not handle auth.
 
- 5. Generate gh commands to publish review:
+6. Generate gh commands to publish new findings:
 - One summary review: gh api repos/${CI_REPO}/pulls/${CI_COMMIT_PULL_REQUEST}/reviews -f event="COMMENT" -f body="..." -f commit_id="${CI_COMMIT_SHA}"
 - Zero or more inline comments: gh api repos/${CI_REPO}/pulls/${CI_COMMIT_PULL_REQUEST}/comments -f body="..." -f commit_id="${CI_COMMIT_SHA}" -f path="path/to/file" -F position=N
   position is NOT file line number. To get position, run: gh api repos/${CI_REPO}/pulls/${CI_COMMIT_PULL_REQUEST}/files --jq '.[].patch' or git diff HEAD~1, then count: position 1 is first line after first @@ header, position 2 is next, etc., through all hunks until next file. Use -F for position (integer).
@@ -53,7 +58,7 @@ Example message value:
 
 	cmd := exec.Command("opencode", "run", "--format", "json", "--model", conf.Model, "--log-level", "DEBUG", "--print-logs", strings.TrimSpace(prompt))
 	fmt.Printf("cmd %v\n", cmd)
-	cmd.Env = safeEnv(conf.AiApiKey)
+	cmd.Env = safeEnv(conf.AiApiKey, conf.GhToken)
 	cmd.Dir = "./source"
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -98,6 +103,12 @@ Example message value:
 	if _, err := tmp.WriteString(escaped); err != nil {
 		slog.Error("failed to write commands", "error", err)
 		os.Exit(1)
+	}
+	if strings.TrimSpace(d) != "" {
+		if _, err := tmp.WriteString("\ngh api repos/${CI_REPO}/issues/${CI_COMMIT_PULL_REQUEST}/comments -f body=\"AI review by op-reviewer\"\n"); err != nil {
+			slog.Error("failed to write review marker", "error", err)
+			os.Exit(1)
+		}
 	}
 	if _, err := tmp.WriteString("\n"); err != nil {
 		slog.Error("failed to write trailing newline", "error", err)
@@ -294,7 +305,7 @@ func parseOpenCodeError(data []byte) *OpenCodeError {
 	return nil
 }
 
-func safeEnv(apiKey string) []string {
+func safeEnv(apiKey string, ghToken string) []string {
 	allow := map[string]bool{
 		"HOME":   true,
 		"USER":   true,
@@ -314,5 +325,11 @@ func safeEnv(apiKey string) []string {
 	env = append(env, "TMPDIR=/tmp")
 	env = append(env, "TMP=/tmp")
 	env = append(env, "OPENCODE_API_KEY="+apiKey)
+	env = append(env, "GH_TOKEN="+ghToken)
+	for _, key := range []string{"CI_REPO", "CI_COMMIT_SHA", "CI_COMMIT_PULL_REQUEST"} {
+		if value := os.Getenv(key); value != "" {
+			env = append(env, key+"="+value)
+		}
+	}
 	return env
 }
