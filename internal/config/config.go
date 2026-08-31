@@ -18,7 +18,7 @@ type Config struct {
 	AiApiKey       string
 	RepoUrl        string
 	SHA            string
-	ghToken        string
+	GhToken        string
 	SourceCodePath string
 }
 
@@ -31,25 +31,19 @@ func New() (*Config, error) {
 	conf.Model = os.Getenv(ENV_PREFIX + "MODEL")
 	conf.RepoUrl = os.Getenv("CI_REPO_URL")
 	conf.SHA = os.Getenv("CI_COMMIT_SHA")
-	conf.ghToken = os.Getenv("OP_REVIEWER_GH_TOKEN")
-	sourceCodePathEnv := os.Getenv("OP_REVIEWER_SC_PATH")
-	if len(sourceCodePathEnv) == 0 {
-		slog.Info("didnt found 'OP_REVIEWER_SC_PATH'", "source_code_path", "./source")
-		conf.SourceCodePath = "./source"
-	} else {
-		slog.Info("found 'OP_REVIEWER_SC_PATH'", "source_code_path", sourceCodePathEnv)
-		conf.SourceCodePath = sourceCodePathEnv
-	}
+	conf.GhToken = os.Getenv("OP_REVIEWER_GH_TOKEN")
+	conf.SourceCodePath = "./source"
 
 	if _, err := os.Stat(filepath.Join(conf.SourceCodePath, ".git")); os.IsNotExist(err) {
 		slog.Info("git: repo not found in source code path, fetching via repo url", "repo_url", conf.RepoUrl)
 		if err := utils.ExecCmdPiped(exec.Command("git", "clone", conf.RepoUrl, conf.SourceCodePath)); err != nil {
 			return nil, fmt.Errorf("config: failed to clone repo: %v", err)
 		}
-		slog.Info("git: checking out", "sha", conf.SHA)
-		if err := utils.ExecCmdPiped(exec.Command("git", "-C", conf.SourceCodePath, "checkout", conf.SHA)); err != nil {
-			return nil, fmt.Errorf("config: failed to clone repo: %v", err)
-		}
+	}
+
+	slog.Info("git: checking out", "sha", conf.SHA)
+	if err := utils.ExecCmdPiped(exec.Command("git", "-C", conf.SourceCodePath, "checkout", conf.SHA)); err != nil {
+		return nil, fmt.Errorf("config: failed to clone repo: %v", err)
 	}
 
 	return conf, nil
