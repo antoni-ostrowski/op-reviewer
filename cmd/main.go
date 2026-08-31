@@ -49,12 +49,12 @@ Use them to identify findings already reported anywhere on this PR. Do not repea
 
 6. Generate gh commands to publish new findings:
 - One summary review: gh api repos/${CI_REPO}/pulls/${CI_COMMIT_PULL_REQUEST}/reviews -f event="COMMENT" -f body="..." -f commit_id="${CI_COMMIT_SHA}"
-- Zero or more inline comments: gh api repos/${CI_REPO}/pulls/${CI_COMMIT_PULL_REQUEST}/comments -f body="..." -f commit_id="${CI_COMMIT_SHA}" -f path="path/to/file" -F position=N
-  position is NOT file line number. To get position, run: gh api repos/${CI_REPO}/pulls/${CI_COMMIT_PULL_REQUEST}/files --jq '.[].patch' or git diff HEAD~1, then count: position 1 is first line after first @@ header, position 2 is next, etc., through all hunks until next file. Use -F for position (integer).
+- Zero or more inline comments: gh api repos/${CI_REPO}/pulls/${CI_COMMIT_PULL_REQUEST}/comments -f body="..." -f commit_id="${CI_COMMIT_SHA}" -f path="path/to/file" -F line=N -f side="RIGHT"
+  line MUST be the absolute line number in the current file, not a diff position, offset, or file index. Use only lines present on the new/current side of the diff with side="RIGHT". Read the hunk header from git diff HEAD~1 or the GitHub patch, then map the selected added line to its current file line number. Never use position.
 Join all commands with \\n inside message.
 
 Example message value:
-"gh api repos/${CI_REPO}/pulls/${CI_COMMIT_PULL_REQUEST}/comments -f body=\"Avoid sync read in handler at src.js:12\" -f commit_id=\"${CI_COMMIT_SHA}\" -f path=\"src.js\" -F position=6\\ngh api repos/${CI_REPO}/pulls/${CI_COMMIT_PULL_REQUEST}/reviews -f event=\"COMMENT\" -f body=\"Overall: fix error handling, otherwise LGTM\" -f commit_id=\"${CI_COMMIT_SHA}\""	`
+"gh api repos/${CI_REPO}/pulls/${CI_COMMIT_PULL_REQUEST}/comments -f body=\"Avoid sync read in handler at src.js:12\" -f commit_id=\"${CI_COMMIT_SHA}\" -f path=\"src.js\" -F line=12 -f side=\"RIGHT\"\\ngh api repos/${CI_REPO}/pulls/${CI_COMMIT_PULL_REQUEST}/reviews -f event=\"COMMENT\" -f body=\"Overall: fix error handling, otherwise LGTM\" -f commit_id=\"${CI_COMMIT_SHA}\""	`
 
 	cmd := exec.Command("opencode", "run", "--format", "json", "--model", conf.Model, "--log-level", "DEBUG", "--print-logs", strings.TrimSpace(prompt))
 	fmt.Printf("cmd %v\n", cmd)
@@ -98,7 +98,10 @@ Example message value:
 		os.Exit(1)
 	}
 	// bash treats `code` inside "..." as command substitution -> must escape
-	normalized := strings.ReplaceAll(d, "\\`", "`")
+	// Shell double quotes preserve literal backslash-n sequences; turn model-generated
+	// escaped newlines into actual newlines before executing gh commands.
+	normalized := strings.ReplaceAll(d, "\\n", "\n")
+	normalized = strings.ReplaceAll(normalized, "\\`", "`")
 	escaped := strings.ReplaceAll(normalized, "`", "\\`")
 	if _, err := tmp.WriteString(escaped); err != nil {
 		slog.Error("failed to write commands", "error", err)
