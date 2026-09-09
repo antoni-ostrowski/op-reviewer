@@ -37,7 +37,7 @@ Use them to identify findings already reported anywhere on this PR. Do not repea
 3. Review for: bugs, logic errors, security issues, error handling, code quality, performance.
 
 4. Return ONLY one JSON object matching {"body":"summary","comments":[{"body":"finding","path":"file","line":12}]}. No markdown, no explanation, no extra keys. If there are no new findings, return {"body":"","comments":[]}.
-Do not return shell commands, scripts, tool calls, or progress prose. Do not write files or temporary scripts. Do not ask for confirmation. CI runs without a user present, so use only non-interactive, read-only commands while gathering context. Every non-empty body MUST end with two newlines followed by exactly: AI review by op-reviewer.
+Do not return shell commands, scripts, tool calls, or progress prose. Do not write files or temporary scripts. Do not ask for confirmation. CI runs without a user present, so use only non-interactive, read-only commands while gathering context. The application adds the review attribution; do not add it yourself.
 
 5. Use ONLY these bash placeholders with ${VAR} syntax:
 - ${CI_COMMIT_SHA} - commit SHA to review
@@ -89,8 +89,6 @@ type ReviewComment struct {
 	Line int    `json:"line"`
 }
 
-const reviewMarker = "AI review by op-reviewer"
-
 func parseReviewResponse(data string) (ReviewResponse, error) {
 	var review ReviewResponse
 	if err := json.Unmarshal([]byte(strings.TrimSpace(data)), &review); err != nil {
@@ -129,22 +127,11 @@ func publishReview(conf *config.Config, review ReviewResponse) error {
 
 	env := os.Environ()
 	env = append(env, "GH_TOKEN="+conf.GhToken, "GITHUB_TOKEN="+conf.GhToken)
-	if review.Body != "" {
-		args := []string{
-			"api", fmt.Sprintf("repos/%s/pulls/%s/reviews", repo, pullRequest),
-			"-f", "event=COMMENT",
-			"-f", "body=" + withReviewMarker(review.Body),
-			"-f", "commit_id=" + conf.SHA,
-		}
-		if err := runGH(conf.SourceCodePath, env, args...); err != nil {
-			return fmt.Errorf("summary review: %w", err)
-		}
-	}
 
 	for i, comment := range review.Comments {
 		args := []string{
 			"api", fmt.Sprintf("repos/%s/pulls/%s/comments", repo, pullRequest),
-			"-f", "body=" + withReviewMarker(comment.Body),
+			"-f", "body=" + comment.Body,
 			"-f", "commit_id=" + conf.SHA,
 			"-f", "path=" + comment.Path,
 			"-F", fmt.Sprintf("line=%d", comment.Line),
@@ -154,15 +141,20 @@ func publishReview(conf *config.Config, review ReviewResponse) error {
 			return fmt.Errorf("inline comment %d: %w", i, err)
 		}
 	}
-	return nil
-}
-
-func withReviewMarker(body string) string {
-	body = strings.TrimRight(body, "\n")
-	if strings.HasSuffix(body, reviewMarker) {
-		return body
+	if review.Body != "" {
+		review.Body += "\n\nAI review by op-reviewer"
+		args := []string{
+			"api", fmt.Sprintf("repos/%s/pulls/%s/reviews", repo, pullRequest),
+			"-f", "event=COMMENT",
+			"-f", "body=" + review.Body,
+			"-f", "commit_id=" + conf.SHA,
+		}
+		if err := runGH(conf.SourceCodePath, env, args...); err != nil {
+			return fmt.Errorf("summary review: %w", err)
+		}
 	}
-	return body + "\n\n" + reviewMarker
+
+	return nil
 }
 
 func runGH(dir string, env []string, args ...string) error {
