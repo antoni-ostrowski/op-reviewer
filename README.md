@@ -11,8 +11,11 @@ latest pull-request commit and publish the result to GitHub. Executes in docker 
 2. Clones `CI_REPO_URL` into `./source` when a checkout is not already present.
 3. Checks out `CI_COMMIT_SHA`.
 4. Runs OpenCode in the checked-out repository and asks it to review the diff.
-5. Parses OpenCode's JSON response for generated `gh api` commands.
-6. Executes those commands to create a pull-request summary and optional inline comments.
+5. Parses OpenCode's JSON response into a summary and optional inline comments.
+6. Publishes those review items with direct, argument-safe `gh api` calls.
+
+The model never generates executable shell. Review text is validated as JSON and
+passed to `gh` as arguments, so model prose cannot become a shell command.
 
 The container includes the compiled reviewer binary, OpenCode, GitHub CLI, and Git.
 The repository being reviewed is fetched at runtime and is not included in the image.

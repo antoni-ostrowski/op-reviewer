@@ -36,31 +36,22 @@ Use them to identify findings already reported anywhere on this PR. Do not repea
 
 3. Review for: bugs, logic errors, security issues, error handling, code quality, performance.
 
-4. Return ONLY a single JSON string matching schema {"message":"<gh commands joined by \\n>"}. No markdown, no explanation, no extra keys. Put all write gh commands inside the message field. Every review or inline comment body MUST end with two newlines followed by exactly: AI review by op-reviewer. If there are no new findings, return {"message":""}.
+4. Return ONLY one JSON object matching {"body":"summary","comments":[{"body":"finding","path":"file","line":12}]}. No markdown, no explanation, no extra keys. If there are no new findings, return {"body":"","comments":[]}.
+Do not return shell commands, scripts, tool calls, or progress prose. Do not write files or temporary scripts. Do not ask for confirmation. CI runs without a user present, so use only non-interactive, read-only commands while gathering context. Every non-empty body MUST end with two newlines followed by exactly: AI review by op-reviewer.
 
 5. Use ONLY these bash placeholders with ${VAR} syntax:
 - ${CI_COMMIT_SHA} - commit SHA to review
 - ${CI_REPO} - owner/repo (e.g. octocat/hello-world) — use this for gh api paths
 - ${CI_COMMIT_PULL_REQUEST} - pull request number
-- gh CLI is already authenticated via GH_TOKEN. Read-only gh api commands above are allowed for gathering context. Do not execute write commands; return them in the JSON response only. Do not handle auth.
+- gh CLI is already authenticated via GH_TOKEN. Read-only gh api commands above are allowed for gathering context. Do not execute write commands. Do not handle auth.
 
-6. Generate gh commands to publish new findings:
-- One summary review: gh api repos/${CI_REPO}/pulls/${CI_COMMIT_PULL_REQUEST}/reviews -f event="COMMENT" -f body="..." -f commit_id="${CI_COMMIT_SHA}"
-- Zero or more inline comments: gh api repos/${CI_REPO}/pulls/${CI_COMMIT_PULL_REQUEST}/comments -f body="..." -f commit_id="${CI_COMMIT_SHA}" -f path="path/to/file" -F line=N -f side="RIGHT"
-  line MUST be the absolute line number in the current file, not a diff position, offset, or file index. Use only lines present on the new/current side of the diff with side="RIGHT". Read the hunk header from git diff HEAD~1 or the GitHub patch, then map the selected added line to its current file line number. Never use position.
-  Every body must end with \n\nAI review by op-reviewer.
-Join all commands with \\n inside message.
+6. For inline comments, line MUST be the absolute line number in the current file, not a diff position, offset, or file index. Use only lines present on the new/current side of the diff. Read the hunk header from git diff HEAD~1 or the GitHub patch, then map the selected added line to its current file line number. Never use position.`
 
-Example message value:
-"gh api repos/${CI_REPO}/pulls/${CI_COMMIT_PULL_REQUEST}/comments -f body=\"Avoid sync read in handler at src.js:12\" -f commit_id=\"${CI_COMMIT_SHA}\" -f path=\"src.js\" -F line=12 -f side=\"RIGHT\"\\ngh api repos/${CI_REPO}/pulls/${CI_COMMIT_PULL_REQUEST}/reviews -f event=\"COMMENT\" -f body=\"Overall: fix error handling, otherwise LGTM\" -f commit_id=\"${CI_COMMIT_SHA}\""	`
-
-	cmd := exec.Command("opencode", "run", "--format", "json", "--model", conf.Model, "--log-level", "DEBUG", "--print-logs", strings.TrimSpace(prompt))
-	fmt.Printf("cmd %v\n", cmd)
+	cmd := exec.Command("opencode", "run", "--auto", "--format", "json", "--model", conf.Model, "--log-level", "DEBUG", "--print-logs", strings.TrimSpace(prompt))
 	cmd.Env = safeEnv(conf.AiApiKey, conf.GhToken)
 	cmd.Dir = conf.SourceCodePath
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		fmt.Printf("res: %v\n", string(out))
 		slog.Error("agent run failed", "error", err, "output", string(out))
 		if apiErr := parseOpenCodeError(out); apiErr != nil {
 			slog.Error("opencode api error",
@@ -74,68 +65,112 @@ Example message value:
 		os.Exit(1)
 	}
 
-	fmt.Printf("res: %v\n", string(out))
 	d := AgentResponse(out)
-	fmt.Printf("agent resp: %v\n", d)
-
-	// write all gh commands to temp bash script and exec it
-	// this avoids strings.Split(d,"\n") which would split inside body="...\n..." as well
-	// shell will expand ${CI_REPO} etc, so no Go ExpandEnv
-	tmp, err := os.CreateTemp("", "gh-commands-*.sh")
+	review, err := parseReviewResponse(d)
 	if err != nil {
-		slog.Error("failed to create temp script", "error", err)
+		slog.Error("invalid agent review response", "error", err, "response", d)
 		os.Exit(1)
 	}
-	scriptPath := tmp.Name()
-	defer func() {
-		tmp.Close()
-		_ = os.Remove(scriptPath)
-	}()
-	if _, err := tmp.WriteString("#!/usr/bin/env bash\nset +e\n"); err != nil {
-		slog.Error("failed to write script header", "error", err)
-		os.Exit(1)
-	}
-	// bash treats `code` inside "..." as command substitution -> must escape
-	// Shell double quotes preserve literal backslash-n sequences; turn model-generated
-	// escaped newlines into actual newlines before executing gh commands.
-	normalized := strings.ReplaceAll(d, "\\n", "\n")
-	normalized = strings.ReplaceAll(normalized, "\\`", "`")
-	escaped := strings.ReplaceAll(normalized, "`", "\\`")
-	if _, err := tmp.WriteString(escaped); err != nil {
-		slog.Error("failed to write commands", "error", err)
-		os.Exit(1)
-	}
-	if _, err := tmp.WriteString("\n"); err != nil {
-		slog.Error("failed to write trailing newline", "error", err)
-		os.Exit(1)
-	}
-	_ = tmp.Close()
-	if err := os.Chmod(scriptPath, 0755); err != nil {
-		slog.Error("failed to chmod script", "error", err)
-		os.Exit(1)
-	}
-	fmt.Printf("wrote gh commands to %s\n", scriptPath)
-	content, _ := os.ReadFile(scriptPath)
-	fmt.Printf("script content:\n%s\n---\n", string(content))
-	// ensure CI_REPO is in Env for shell expansion (derive from CI_REPO_URL if missing)
-	env := os.Environ()
-	if os.Getenv("CI_REPO") == "" && conf.RepoUrl != "" {
-		repo := strings.TrimPrefix(conf.RepoUrl, "https://github.com/")
-		repo = strings.TrimPrefix(repo, "http://github.com/")
-		repo = strings.TrimSuffix(repo, ".git")
-		repo = strings.TrimSuffix(repo, "/")
-		env = append(env, "CI_REPO="+repo)
-		fmt.Printf("derived CI_REPO=%s for shell expansion\n", repo)
-	}
-	env = append(env, "GH_TOKEN="+conf.GhToken, "GITHUB_TOKEN="+conf.GhToken)
-	c := exec.Command("bash", scriptPath)
-	c.Env = env
-	c.Dir = conf.SourceCodePath
-	if err := utils.ExecCmdPiped(c); err != nil {
-		slog.Error("gh script failed", "script", scriptPath, "error", err)
+	if err := publishReview(conf, review); err != nil {
+		slog.Error("failed to publish review", "error", err)
 		os.Exit(1)
 	}
 
+}
+
+type ReviewResponse struct {
+	Body     string          `json:"body"`
+	Comments []ReviewComment `json:"comments"`
+}
+
+type ReviewComment struct {
+	Body string `json:"body"`
+	Path string `json:"path"`
+	Line int    `json:"line"`
+}
+
+const reviewMarker = "AI review by op-reviewer"
+
+func parseReviewResponse(data string) (ReviewResponse, error) {
+	var review ReviewResponse
+	if err := json.Unmarshal([]byte(strings.TrimSpace(data)), &review); err != nil {
+		return ReviewResponse{}, fmt.Errorf("expected JSON review object: %w", err)
+	}
+	for i, comment := range review.Comments {
+		if strings.TrimSpace(comment.Body) == "" {
+			return ReviewResponse{}, fmt.Errorf("comment %d has empty body", i)
+		}
+		if strings.TrimSpace(comment.Path) == "" {
+			return ReviewResponse{}, fmt.Errorf("comment %d has empty path", i)
+		}
+		if comment.Line < 1 {
+			return ReviewResponse{}, fmt.Errorf("comment %d has invalid line %d", i, comment.Line)
+		}
+	}
+	return review, nil
+}
+
+func publishReview(conf *config.Config, review ReviewResponse) error {
+	if strings.TrimSpace(review.Body) == "" && len(review.Comments) == 0 {
+		slog.Info("review completed with no new findings")
+		return nil
+	}
+
+	repo := os.Getenv("CI_REPO")
+	if repo == "" {
+		repo = strings.TrimPrefix(conf.RepoUrl, "https://github.com/")
+		repo = strings.TrimPrefix(repo, "http://github.com/")
+		repo = strings.TrimSuffix(strings.TrimSuffix(repo, ".git"), "/")
+	}
+	pullRequest := os.Getenv("CI_COMMIT_PULL_REQUEST")
+	if repo == "" || pullRequest == "" {
+		return fmt.Errorf("CI_REPO and CI_COMMIT_PULL_REQUEST are required to publish review")
+	}
+
+	env := os.Environ()
+	env = append(env, "GH_TOKEN="+conf.GhToken, "GITHUB_TOKEN="+conf.GhToken)
+	if review.Body != "" {
+		args := []string{
+			"api", fmt.Sprintf("repos/%s/pulls/%s/reviews", repo, pullRequest),
+			"-f", "event=COMMENT",
+			"-f", "body=" + withReviewMarker(review.Body),
+			"-f", "commit_id=" + conf.SHA,
+		}
+		if err := runGH(conf.SourceCodePath, env, args...); err != nil {
+			return fmt.Errorf("summary review: %w", err)
+		}
+	}
+
+	for i, comment := range review.Comments {
+		args := []string{
+			"api", fmt.Sprintf("repos/%s/pulls/%s/comments", repo, pullRequest),
+			"-f", "body=" + withReviewMarker(comment.Body),
+			"-f", "commit_id=" + conf.SHA,
+			"-f", "path=" + comment.Path,
+			"-F", fmt.Sprintf("line=%d", comment.Line),
+			"-f", "side=RIGHT",
+		}
+		if err := runGH(conf.SourceCodePath, env, args...); err != nil {
+			return fmt.Errorf("inline comment %d: %w", i, err)
+		}
+	}
+	return nil
+}
+
+func withReviewMarker(body string) string {
+	body = strings.TrimRight(body, "\n")
+	if strings.HasSuffix(body, reviewMarker) {
+		return body
+	}
+	return body + "\n\n" + reviewMarker
+}
+
+func runGH(dir string, env []string, args ...string) error {
+	slog.Info("publishing review item")
+	cmd := exec.Command("gh", args...)
+	cmd.Env = env
+	cmd.Dir = dir
+	return utils.ExecCmdPiped(cmd)
 }
 
 func AgentResponse(data []byte) string {
