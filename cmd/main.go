@@ -4,13 +4,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
 
 	"github.com/antoni-ostrowski/op-reviewer/internal/config"
-	"github.com/antoni-ostrowski/op-reviewer/internal/utils"
 )
 
 func main() {
@@ -34,9 +34,10 @@ You are a code review agent. You are running inside the repo (cwd is repo root) 
 - gh api repos/${CI_REPO}/pulls/${CI_COMMIT_PULL_REQUEST}/comments
 Use them to identify findings already reported anywhere on this PR. Do not repeat an existing finding, even if it was reported on an earlier commit. Report only genuinely new findings introduced by the latest diff.
 
-3. Review for: bugs, logic errors, security issues, error handling, code quality, performance.
+3. Review for: bugs, logic errors, security issues, error handling, code quality, performance. Only report meaningful, actionable findings worth the author's attention.
 
-4. Return ONLY one JSON object matching {"body":"summary","comments":[{"body":"finding","path":"file","line":12}]}. No markdown, no explanation, no extra keys. If there are no new findings, return {"body":"","comments":[]}.
+4. A review is OPTIONAL and NOT required. If the changes look correct, clean, trivial, or have nothing meaningful to pick on, report nothing — that is the expected outcome for good code. Do NOT nitpick, do NOT report style preferences, subjective suggestions, or low-value nits just to have something to say. When in doubt, stay silent. If there are no new findings, return {"body":"","comments":[]}.
+Return ONLY one JSON object matching {"body":"summary","comments":[{"body":"finding","path":"file","line":12}]}. No markdown, no explanation, no extra keys.
 Do not return shell commands, scripts, tool calls, or progress prose. Do not write files or temporary scripts. Do not ask for confirmation. CI runs without a user present, so use only non-interactive, read-only commands while gathering context. The application adds the review attribution; do not add it yourself.
 
 5. Use ONLY these bash placeholders with ${VAR} syntax:
@@ -128,41 +129,95 @@ func publishReview(conf *config.Config, review ReviewResponse) error {
 	env := os.Environ()
 	env = append(env, "GH_TOKEN="+conf.GhToken, "GITHUB_TOKEN="+conf.GhToken)
 
+	var failed []ReviewComment
+	published := 0
+
 	for i, comment := range review.Comments {
+		body := comment.Body + "\n\nAI review by op-reviewer"
 		args := []string{
 			"api", fmt.Sprintf("repos/%s/pulls/%s/comments", repo, pullRequest),
-			"-f", "body=" + comment.Body,
+			"-f", "body=" + body,
 			"-f", "commit_id=" + conf.SHA,
 			"-f", "path=" + comment.Path,
 			"-F", fmt.Sprintf("line=%d", comment.Line),
 			"-f", "side=RIGHT",
 		}
 		if err := runGH(conf.SourceCodePath, env, args...); err != nil {
-			return fmt.Errorf("inline comment %d: %w", i, err)
+			// Don't abort: GitHub 422s when path/line/side doesn't resolve
+			// to a diff position. Keep it for summary fallback.
+			slog.Warn("failed to publish inline comment, will fallback to summary",
+				"index", i, "path", comment.Path, "line", comment.Line, "error", err)
+			failed = append(failed, comment)
+			continue
 		}
-	}
-	if review.Body != "" {
-		review.Body += "\n\nAI review by op-reviewer"
-		args := []string{
-			"api", fmt.Sprintf("repos/%s/pulls/%s/reviews", repo, pullRequest),
-			"-f", "event=COMMENT",
-			"-f", "body=" + review.Body,
-			"-f", "commit_id=" + conf.SHA,
-		}
-		if err := runGH(conf.SourceCodePath, env, args...); err != nil {
-			return fmt.Errorf("summary review: %w", err)
-		}
+		published++
 	}
 
+	summaryBody := review.Body
+	if len(failed) > 0 {
+		var b strings.Builder
+		if strings.TrimSpace(summaryBody) != "" {
+			b.WriteString(strings.TrimSpace(summaryBody))
+			b.WriteString("\n\n")
+		}
+		b.WriteString("Unplaced inline findings (line not in diff):\n")
+		for _, c := range failed {
+			b.WriteString(fmt.Sprintf("\n- `%s:%d` — %s", c.Path, c.Line, c.Body))
+		}
+		summaryBody = b.String()
+	}
+	if strings.TrimSpace(summaryBody) == "" {
+		if published > 0 {
+			if len(failed) > 0 {
+				slog.Warn("published review partially", "publishedInline", published, "failedInline", len(failed))
+			}
+			return nil
+		}
+		return fmt.Errorf("%d inline comment(s) failed and no summary to publish", len(failed))
+	}
+	summaryBody += "\n\nAI review by op-reviewer"
+	args := []string{
+		"api", fmt.Sprintf("repos/%s/pulls/%s/reviews", repo, pullRequest),
+		"-f", "event=COMMENT",
+		"-f", "body=" + summaryBody,
+		"-f", "commit_id=" + conf.SHA,
+	}
+	if err := runGH(conf.SourceCodePath, env, args...); err != nil {
+		if published > 0 {
+			// Inline comments landed, summary lost: partial success, don't fail CI.
+			slog.Error("failed to publish summary review, inline comments already published",
+				"publishedInline", published, "error", err)
+			return nil
+		}
+		return fmt.Errorf("summary review: %w (%d inline(s) also failed)", err, len(failed))
+	}
+	published++
+
+	if len(failed) > 0 {
+		slog.Warn("published review partially", "published", published, "failedInline", len(failed))
+	}
 	return nil
 }
 
 func runGH(dir string, env []string, args ...string) error {
 	slog.Info("publishing review item")
+	var buf bytes.Buffer
 	cmd := exec.Command("gh", args...)
 	cmd.Env = env
 	cmd.Dir = dir
-	return utils.ExecCmdPiped(cmd)
+	cmd.Stdout = io.MultiWriter(os.Stdout, &buf)
+	cmd.Stderr = io.MultiWriter(os.Stderr, &buf)
+	if err := cmd.Run(); err != nil {
+		out := strings.TrimSpace(buf.String())
+		if len(out) > 2000 {
+			out = out[:2000] + "..."
+		}
+		if out == "" {
+			return err
+		}
+		return fmt.Errorf("%w: %s", err, out)
+	}
+	return nil
 }
 
 func AgentResponse(data []byte) string {
